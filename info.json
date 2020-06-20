@@ -1,0 +1,8 @@
+{
+  "name": "localised-search-helper",
+  "title": "Localised Search Helper",
+  "author": "therax",
+  "factorio_version": "0.18",
+  "version": "0.1.0",
+  "dependencies": [ "flib" ]
+}
