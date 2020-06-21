@@ -19,18 +19,18 @@ local SuffixTree = {}
 ---                     using the closest node prior to the start position
 local function canonize(self, s, k, p)
   if p < k then return s, k end
-  local edge = s.edges[self.rope:get_char(k)]
-  local sp = edge.next
-  local kp = edge.start_pos
-  local pp = edge.end_pos
+  local edge = s[self.rope:get_char(k)]
+  local sp = edge[3]
+  local kp = edge[1]
+  local pp = edge[2]
   while pp - kp <= p - k do
     k = k + (pp - kp) + 1
     s = sp
     if k <= p then
-      local edge = s.edges[self.rope:get_char(k)]
-      sp = edge.next
-      kp = edge.start_pos
-      pp = edge.end_pos
+      local edge = s[self.rope:get_char(k)]
+      sp = edge[3]
+      kp = edge[1]
+      pp = edge[2]
     end
   end
   return s, k
@@ -52,26 +52,24 @@ local function test_and_split(self, s, k, p, t)
   if k > p then
     -- range is empty, check if the node already has an outgoing edge for the
     -- character. If so, we are done with the update.
-    local edge = s.edges[t]
+    local edge = s[t]
     return edge ~= nil, s
   end
     local tk = self.rope:get_char(k)
-    local edge = s.edges[tk]
-    local sp = edge.next
-    local kp = edge.start_pos
-    local pp = edge.end_pos
+    local edge = s[tk]
+    local sp = edge[3]
+    local kp = edge[1]
+    local pp = edge[2]
     local split_pos = kp + p - k + 1
     local split_char = self.rope:get_char(split_pos)
     if t == split_char then
       return true, s
     end
     local new_node = {
-      edges = {
-        [split_char] = {start_pos = split_pos, end_pos = pp, next = sp}
-      }
+      [split_char] = {split_pos, pp, sp}
     }
-    s.edges[tk].end_pos = split_pos - 1
-    s.edges[tk].next = new_node
+    s[tk][2] = split_pos - 1
+    s[tk][3] = new_node
     return false, new_node
 end
 
@@ -85,7 +83,7 @@ local function update(self, s, k, i)
   local ch = self.rope:get_char(i)
   local end_point, r = test_and_split(self, s, k, i - 1, ch)
   while not end_point do
-    r.edges[ch] = { start_pos = i, end_pos = math.huge, next = {edges={}, suffix_link = nil}}
+    r[ch] = { i, math.huge, {suffix_link = nil} }
     if oldr ~= self.root then
       oldr.suffix_link = r
     end
@@ -101,12 +99,11 @@ end
 
 ---@return boolean true if the entire input to this point has been processed
 function SuffixTree:run_once()
-  if self.i < self.rope:get_length() then
-    self.i = self.i + 1
-    self.s, self.k = update(self, self.s, self.k, self.i)
-    self.s, self.k = canonize(self, self.s, self.k, self.i)
-  end
-  return self.i >= self.rope:get_length()
+  if self.i >= self.rope:get_length() then return true end
+  self.i = self.i + 1
+  self.s, self.k = update(self, self.s, self.k, self.i)
+  self.s, self.k = canonize(self, self.s, self.k, self.i)
+  return false
 end
 
 local sub = string.sub
@@ -117,12 +114,12 @@ function SuffixTree:positions_with_substring(needle)
   local m = self.rope:get_length()
   local l = #needle
   if l <= 0 then return {} end
-  local edge = self.root.edges[sub(needle, 1, 1)]
+  local edge = self.root[sub(needle, 1, 1)]
   if not edge then return {} end
   local i = 1
   local path_length = 0
   while i <= l do
-    for pos=edge.start_pos,edge.end_pos do
+    for pos=edge[1],edge[2] do
       if i > l then
         goto matched
       end
@@ -133,13 +130,12 @@ function SuffixTree:positions_with_substring(needle)
       i = i + 1
     end
     -- reached end of edge without mismatch
-    path_length = path_length + (edge.end_pos - edge.start_pos + 1)
+    path_length = path_length + (edge[2] - edge[1] + 1)
     if i <= l then
-      local node = edge.next
+      local node = edge[3]
       if not node then return {} end
-      edge = node.edges[sub(needle, i, i)]
+      edge = node[sub(needle, i, i)]
       if not edge then return {} end
-      i = i + 1
     end
   end
   ::matched::
@@ -154,18 +150,20 @@ function SuffixTree:positions_with_substring(needle)
     stack[#stack] = nil
     path_lengths[#path_lengths] = nil
 
-    if edge.end_pos >= math.huge then
+    if edge[2] >= math.huge then
       -- found a leaf
-      out[#out+1] = edge.start_pos - path_length
+      out[#out+1] = edge[1] - path_length
     end
 
-    for _, new_edge in pairs(edge.next.edges) do
+    for ch, new_edge in pairs(edge[3]) do
+      if #ch > 1 then goto continue end
       stack[#stack+1] = new_edge
-      if new_edge.end_pos < math.huge then
-        path_lengths[#path_lengths+1] = path_length + (new_edge.end_pos - new_edge.start_pos + 1)
+      if new_edge[2] < math.huge then
+        path_lengths[#path_lengths+1] = path_length + (new_edge[2] - new_edge[1] + 1)
       else
         path_lengths[#path_lengths+1] = path_length
       end
+      ::continue::
     end
   end
 
@@ -178,8 +176,7 @@ function SuffixTree:segments_with_substring(needle)
   local out = {}
   local positions = self:positions_with_substring(needle)
   for k, match_start in pairs(positions) do
-    self.rope:seek(match_start)
-    out[self.rope:get_current_segment()] = true
+    out[self.rope:get_segment(match_start)] = true
   end
   return out
 end
@@ -188,21 +185,19 @@ local meta = { __index = SuffixTree }
 
 ---@return SuffixTree
 local function restore(self)
+  Rope.restore(self.rope)
+  setmetatable(self.empty, {__index = function()
+    return { -9e15, -9e15, root, }
+  end})
   return setmetatable(self, meta)
 end
 
 ---@param rope Rope
 local function new(rope)
-  local root = {
-    edges = {}
-  }
+  local root = {}
   local self = {
     rope = rope,
-    empty = {
-      edges = setmetatable({}, {__index = function()
-        return { next = root, start_pos = -9e15, end_pos = -9e15 }
-      end}),
-    },
+    empty = {},
     root = root,
     k = 1,
     i = 0,
