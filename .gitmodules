@@ -1,0 +1,4 @@
+[submodule "lualib/textindex"]
+	path = lualib/textindex
+	url = ../lua-textindex
+	shallow = true
